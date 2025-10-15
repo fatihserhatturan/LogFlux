@@ -33,3 +33,9 @@ Thumbs.db
 # Build
 /bin/
 /dist/
+
+# Personal documentation
+Instruction.pdf
+RoadMap.pdf
+*.pdf
+```
