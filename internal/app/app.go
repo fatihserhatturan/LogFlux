@@ -23,6 +23,7 @@ import (
 	"github.com/fatihserhatturan/logflux/internal/sinks"
 	"github.com/fatihserhatturan/logflux/internal/stats"
 	"github.com/fatihserhatturan/logflux/internal/storage"
+	"github.com/fatihserhatturan/logflux/internal/ui"
 	"github.com/fatihserhatturan/logflux/pkg/models"
 )
 
@@ -102,6 +103,7 @@ func New(cfg *config.Config, opts Options) (*App, error) {
 	if opts.Stdout != nil {
 		a.pipeline.AddSink("stdout", sinks.NewStdout(opts.Stdout))
 	}
+	a.api.Handle("/", ui.Handler())
 	ok = true
 	return a, nil
 }

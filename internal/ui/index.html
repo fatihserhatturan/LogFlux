@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LogFlux</title>
+<style>
+:root {
+  --bg: #f7f7f8; --panel: #ffffff; --text: #1d1d1f; --muted: #6b6b73; --border: #e3e3e8;
+  --accent: #2563eb; --row: #fafafa;
+  --debug: #8b8b95; --info: #2563eb; --warning: #d97706; --error: #dc2626; --critical: #9333ea;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111114; --panel: #1a1a1f; --text: #ececf1; --muted: #9a9aa5; --border: #2c2c34;
+    --accent: #60a5fa; --row: #1e1e24;
+    --debug: #8b8b95; --info: #60a5fa; --warning: #fbbf24; --error: #f87171; --critical: #c084fc;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+header h1 { margin: 0; font-size: 18px; }
+nav { display: flex; gap: 4px; }
+nav button { background: none; border: 0; padding: 6px 12px; border-radius: 6px; color: var(--muted); cursor: pointer; font: inherit; }
+nav button.active { background: var(--bg); color: var(--text); font-weight: 600; }
+#health { margin-left: auto; color: var(--muted); font-size: 12px; }
+main { padding: 16px 20px; max-width: 1400px; margin: 0 auto; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+form.filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+input, select, button.btn { font: inherit; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); }
+input[name=q] { flex: 1 1 240px; }
+button.btn { cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+label.live { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+#chart { width: 100%; height: 120px; display: block; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; background: var(--c); vertical-align: -1px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; }
+tbody tr:hover { background: var(--row); }
+td.time { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+td.msg { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; }
+.lvl { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; color: var(--c); border: 1px solid var(--c); }
+.lvl.DEBUG { --c: var(--debug); } .lvl.INFO { --c: var(--info); } .lvl.WARNING { --c: var(--warning); }
+.lvl.ERROR { --c: var(--error); } .lvl.CRITICAL { --c: var(--critical); }
+.muted { color: var(--muted); }
+.empty { padding: 24px; text-align: center; color: var(--muted); }
+.count { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+a.tpl { color: var(--accent); cursor: pointer; text-decoration: none; }
+.hidden { display: none; }
+@media (max-width: 700px) {
+  main { padding: 12px; }
+  td.src, th.src { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>🌊 LogFlux</h1>
+  <nav>
+    <button data-tab="logs" class="active">Logs</button>
+    <button data-tab="alerts">Alerts</button>
+    <button data-tab="templates">Templates</button>
+  </nav>
+  <span id="health"></span>
+</header>
+
+<main>
+  <section id="tab-logs">
+    <div class="panel">
+      <svg id="chart" preserveAspectRatio="none"></svg>
+      <div class="legend">
+        <span style="--c: var(--critical)">CRITICAL</span>
+        <span style="--c: var(--error)">ERROR</span>
+        <span style="--c: var(--warning)">WARNING</span>
+        <span style="--c: var(--info)">INFO</span>
+        <span style="--c: var(--debug)">DEBUG</span>
+        <span class="muted" id="chart-range" style="--c: transparent"></span>
+      </div>
+    </div>
+    <div class="panel">
+      <form class="filters" id="filters">
+        <input name="q" placeholder="Search messages…" autocomplete="off">
+        <select name="source"><option value="">All sources</option></select>
+        <select name="min_level">
+          <option value="">All levels</option>
+          <option value="warning">Warning+</option>
+          <option value="error">Error+</option>
+          <option value="critical">Critical</option>
+        </select>
+        <select name="since">
+          <option value="15m">Last 15 min</option>
+          <option value="1h" selected>Last hour</option>
+          <option value="24h">Last 24 h</option>
+          <option value="168h">Last 7 days</option>
+          <option value="">All time</option>
+        </select>
+        <input type="hidden" name="field.template_id">
+        <button class="btn primary" type="submit">Search</button>
+        <label class="live"><input type="checkbox" id="live"> Live</label>
+      </form>
+    </div>
+    <div class="panel">
+      <p class="count" id="log-count"></p>
+      <table>
+        <thead><tr><th>Time</th><th>Level</th><th class="src">Source</th><th>Message</th></tr></thead>
+        <tbody id="logs"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tab-alerts" class="hidden">
+    <div class="panel">
+      <form class="filters" id="alert-filters">
+        <select name="kind">
+          <option value="">All kinds</option>
+          <option value="new_pattern">New pattern</option>
+          <option value="spike">Spike</option>
+          <option value="silence">Silence</option>
+          <option value="rule">Rule</option>
+        </select>
+        <button class="btn" type="submit">Refresh</button>
+      </form>
+    </div>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Time</th><th>Kind</th><th class="src">Source</th><th>Alert</th></tr></thead>
+        <tbody id="alerts"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tab-templates" class="hidden">
+    <div class="panel">
+      <form class="filters" id="template-filters">
+        <input name="q" placeholder="Filter templates…" autocomplete="off">
+        <select name="min_level">
+          <option value="">All levels</option>
+          <option value="warning">Warning+</option>
+          <option value="error">Error+</option>
+        </select>
+        <select name="sort">
+          <option value="count">Most frequent</option>
+          <option value="recent">Recently seen</option>
+          <option value="new">Newest</option>
+        </select>
+        <button class="btn" type="submit">Refresh</button>
+      </form>
+    </div>
+    <div class="panel">
+      <p class="count" id="template-count"></p>
+      <table>
+        <thead><tr><th>Count</th><th>Level</th><th>Template</th><th class="src">Last seen</th></tr></thead>
+        <tbody id="templates"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = (sel) => document.querySelector(sel);
+const LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
+const MAX_ROWS = 500;
+
+function el(tag, attrs = {}, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v; else if (k === "text") e.textContent = v; else e.setAttribute(k, v);
+  }
+  for (const c of children) e.append(c);
+  return e;
+}
+
+function fmtTime(t) {
+  const d = new Date(t);
+  return isNaN(d) ? "" : d.toLocaleString(undefined, { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+async function getJSON(path) {
+  const r = await fetch(path);
+  const body = await r.json();
+  if (!r.ok) throw new Error(body.error || r.statusText);
+  return body;
+}
+
+function params(form) {
+  const p = new URLSearchParams();
+  for (const [k, v] of new FormData(form)) if (v) p.set(k, v);
+  return p;
+}
+
+// ---- tabs ----
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+function showTab(name) {
+  document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll("main > section").forEach((s) => s.classList.toggle("hidden", s.id !== "tab-" + name));
+  if (name === "alerts") loadAlerts();
+  if (name === "templates") loadTemplates();
+}
+
+// ---- logs ----
+function logRow(e) {
+  return el("tr", {},
+    el("td", { class: "time", text: fmtTime(e.timestamp) }),
+    el("td", {}, el("span", { class: "lvl " + e.level, text: e.level })),
+    el("td", { class: "src", text: e.source || "" }),
+    el("td", { class: "msg", text: e.message || "" }));
+}
+
+async function loadLogs() {
+  const p = params($("#filters"));
+  p.set("limit", MAX_ROWS);
+  const tbody = $("#logs");
+  try {
+    const res = await getJSON("/api/query?" + p);
+    tbody.replaceChildren(...res.entries.map(logRow));
+    $("#log-count").textContent = res.count === MAX_ROWS ? `Showing newest ${MAX_ROWS} entries` : `${res.count} entries`;
+    if (!res.count) tbody.replaceChildren(el("tr", {}, el("td", { colspan: 4, class: "empty", text: "No entries match." })));
+  } catch (err) {
+    tbody.replaceChildren(el("tr", {}, el("td", { colspan: 4, class: "empty", text: "Error: " + err.message })));
+  }
+  loadChart();
+}
+
+let stream = null;
+function setLive(on) {
+  if (stream) { stream.close(); stream = null; }
+  if (!on) return;
+  const p = params($("#filters"));
+  p.delete("since");
+  p.set("backlog", "0");
+  stream = new EventSource("/api/tail?" + p);
+  stream.onmessage = (ev) => {
+    const tbody = $("#logs");
+    if (tbody.querySelector(".empty")) tbody.replaceChildren();
+    tbody.prepend(logRow(JSON.parse(ev.data)));
+    while (tbody.rows.length > MAX_ROWS) tbody.deleteRow(-1);
+  };
+}
+
+$("#filters").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  loadLogs();
+  setLive($("#live").checked);
+});
+$("#live").addEventListener("change", (ev) => setLive(ev.target.checked));
+
+// ---- chart: stacked per-minute counts by level ----
+async function loadChart() {
+  const since = $("#filters").since.value || "24h";
+  const step = { "15m": "1m", "1h": "1m", "24h": "15m", "168h": "2h" }[since] || "15m";
+  const p = new URLSearchParams({ since, step });
+  const source = $("#filters").source.value;
+  if (source) p.set("source", source);
+  let res;
+  try { res = await getJSON("/api/stats?" + p); } catch { return; }
+
+  // Fill the source dropdown from known series
+  const select = $("#filters").source;
+  const known = new Set([...select.options].map((o) => o.value));
+  for (const s of new Set(res.series.map((x) => x.source))) {
+    if (!known.has(s)) select.append(el("option", { value: s, text: s }));
+  }
+
+  const n = res.series.length ? res.series[0].points.length : 0;
+  const totals = new Array(n).fill(0);
+  const byLevel = {};
+  for (const s of res.series) {
+    const arr = byLevel[s.level] || (byLevel[s.level] = new Array(n).fill(0));
+    s.points.forEach((pt, i) => { arr[i] += pt.count; totals[i] += pt.count; });
+  }
+  const max = Math.max(1, ...totals);
+  const svg = $("#chart");
+  const W = 1000, H = 120;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.replaceChildren();
+  const bw = n ? W / n : W;
+  for (let i = 0; i < n; i++) {
+    let y = H;
+    for (const lvl of LEVELS) {
+      const v = (byLevel[lvl] || [])[i] || 0;
+      if (!v) continue;
+      const h = (v / max) * (H - 4);
+      y -= h;
+      const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      r.setAttribute("x", i * bw + 0.5); r.setAttribute("width", Math.max(bw - 1, 0.5));
+      r.setAttribute("y", y); r.setAttribute("height", h);
+      r.setAttribute("fill", `var(--${lvl.toLowerCase()})`);
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = `${fmtTime(res.series[0].points[i].t)} · ${lvl}: ${v}`;
+      r.append(title);
+      svg.append(r);
+    }
+  }
+  const sum = totals.reduce((a, b) => a + b, 0);
+  $("#chart-range").textContent = `${sum.toLocaleString()} entries · max ${max.toLocaleString()} per ${step}`;
+}
+
+// ---- alerts ----
+async function loadAlerts() {
+  const p = params($("#alert-filters"));
+  p.set("limit", "500");
+  const tbody = $("#alerts");
+  try {
+    const res = await getJSON("/api/alerts?" + p);
+    if (!res.count) {
+      tbody.replaceChildren(el("tr", {}, el("td", { colspan: 4, class: "empty", text: "No alerts." })));
+      return;
+    }
+    tbody.replaceChildren(...res.alerts.map((a) => {
+      const detail = el("td", { class: "msg" },
+        el("strong", { text: a.title }), document.createTextNode("\n" + (a.message || "")));
+      if (a.sample) detail.append(el("div", { class: "muted", text: "e.g. " + a.sample }));
+      if (a.template_id) {
+        const link = el("a", { class: "tpl", text: "show matching logs" });
+        link.addEventListener("click", () => showTemplateLogs(a.template_id));
+        detail.append(el("div", {}, link));
+      }
+      return el("tr", {},
+        el("td", { class: "time", text: fmtTime(a.time) }),
+        el("td", {}, el("span", { class: "lvl " + a.severity, text: a.kind.replace("_", " ") })),
+        el("td", { class: "src", text: a.source || "" }),
+        detail);
+    }));
+  } catch (err) {
+    tbody.replaceChildren(el("tr", {}, el("td", { colspan: 4, class: "empty", text: "Error: " + err.message })));
+  }
+}
+$("#alert-filters").addEventListener("submit", (ev) => { ev.preventDefault(); loadAlerts(); });
+
+// ---- templates ----
+async function loadTemplates() {
+  const p = params($("#template-filters"));
+  p.set("limit", "500");
+  const tbody = $("#templates");
+  try {
+    const res = await getJSON("/api/templates?" + p);
+    $("#template-count").textContent = `${res.total} templates`;
+    if (!res.templates.length) {
+      tbody.replaceChildren(el("tr", {}, el("td", { colspan: 4, class: "empty", text: "No templates yet." })));
+      return;
+    }
+    tbody.replaceChildren(...res.templates.map((t) => {
+      const link = el("a", { class: "tpl", text: t.template || "(empty)" });
+      link.addEventListener("click", () => showTemplateLogs(t.id));
+      return el("tr", {},
+        el("td", { text: t.count.toLocaleString() }),
+        el("td", {}, el("span", { class: "lvl " + t.max_level, text: t.max_level })),
+        el("td", { class: "msg" }, link),
+        el("td", { class: "time src", text: fmtTime(t.last_seen) }));
+    }));
+  } catch (err) {
+    tbody.replaceChildren(el("tr", {}, el("td", { colspan: 4, class: "empty", text: "Error: " + err.message })));
+  }
+}
+$("#template-filters").addEventListener("submit", (ev) => { ev.preventDefault(); loadTemplates(); });
+
+function showTemplateLogs(id) {
+  const f = $("#filters");
+  f.q.value = "";
+  f["field.template_id"].value = id;
+  f.since.value = "";
+  showTab("logs");
+  loadLogs();
+  // Clear the hidden template filter for the next manual search
+  f["field.template_id"].value = "";
+}
+
+// ---- health ----
+async function loadHealth() {
+  try {
+    const h = await getJSON("/health");
+    $("#health").textContent = `${h.status} · up ${h.uptime}`;
+  } catch {
+    $("#health").textContent = "unreachable";
+  }
+}
+
+loadLogs();
+loadHealth();
+setInterval(loadHealth, 30000);
+setInterval(() => { if (!$("#tab-logs").classList.contains("hidden")) loadChart(); }, 60000);
+</script>
+</body>
+</html>

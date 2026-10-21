@@ -27,6 +27,8 @@ func TestTokenize_Masks(t *testing.T) {
 		"request 550e8400-e29b-41d4-a716-446655440000 done": "request <UUID> done",
 		"mail to bob@example.com failed":                    "mail to <EMAIL> failed",
 		"took 125ms at 10:15:30":                            "took <NUM> at <TIME>",
+		"2026-10-22 00:12:00,000 ERROR boom":                "<DATE> ERROR boom",
+		"[2026-10-22T00:12:00.5+03:00] x":                   "[<DATE>] x",
 		"ptr 0xdeadbeef":                                    "ptr <HEX>",
 		"retry #3 (of 5)":                                   "retry #<NUM> (of <NUM>)",
 		"first line\n\tat stack":                            "first line",

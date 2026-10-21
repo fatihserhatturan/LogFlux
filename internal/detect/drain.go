@@ -26,6 +26,7 @@ var masks = []struct {
 }{
 	{regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`), "<UUID>"},
 	{regexp.MustCompile(`\b[\w.+-]+@[\w-]+\.[\w.-]+\b`), "<EMAIL>"},
+	{regexp.MustCompile(`\b\d{4}[-/]\d{2}[-/]\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b`), "<DATE>"},
 	{regexp.MustCompile(`\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b`), "<IP>"},
 	{regexp.MustCompile(`\b\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\b`), "<TIME>"},
 	{regexp.MustCompile(`\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b`), "<IP>"},
