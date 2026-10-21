@@ -44,7 +44,7 @@ deps: ## Download dependencies
 docker-build: ## Build Docker image
 	docker build -t $(IMAGE_NAME) .
 
-docker-run: ## Run Docker image (HTTP mode on :8080)
-	docker run --rm -p 8080:8080 $(IMAGE_NAME) http :8080
+docker-run: ## Run Docker image (HTTP ingest on :8080, UI on :9090)
+	docker run --rm -p 8080:8080 -p 9090:9090 -v logflux-data:/data $(IMAGE_NAME)
 
 .DEFAULT_GOAL := help
