@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -45,20 +46,29 @@ func (hr *HTTPReceiver) Start(ctx context.Context, out chan<- *models.LogEntry) 
 	mux.HandleFunc("/batch", hr.handleBatch)
 	mux.HandleFunc("/health", hr.handleHealth)
 
+	// Bind first so the actual address is known (e.g. when using port 0)
+	listener, err := net.Listen("tcp", hr.addr)
+	if err != nil {
+		hr.mu.Lock()
+		hr.running = false
+		hr.mu.Unlock()
+		return fmt.Errorf("failed to listen on HTTP: %w", err)
+	}
+
 	hr.server = &http.Server{
-		Addr:         hr.addr,
+		Addr:         listener.Addr().String(),
 		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 
-	fmt.Printf("📡 HTTP receiver listening on %s\n", hr.addr)
+	fmt.Printf("📡 HTTP receiver listening on %s\n", hr.server.Addr)
 	fmt.Println("   POST /logs   - Single log entry")
 	fmt.Println("   POST /batch  - Batch log entries")
 	fmt.Println("   GET  /health - Health check")
 
 	go func() {
-		if err := hr.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := hr.server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			fmt.Printf("HTTP server error: %v\n", err)
 		}
 	}()
@@ -239,6 +249,16 @@ func (hr *HTTPReceiver) Stop() error {
 	}
 
 	return nil
+}
+
+// Addr returns the actual listening address
+func (hr *HTTPReceiver) Addr() string {
+	hr.mu.Lock()
+	defer hr.mu.Unlock()
+	if hr.server == nil {
+		return hr.addr
+	}
+	return hr.server.Addr
 }
 
 // Name returns the source name

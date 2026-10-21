@@ -4,6 +4,7 @@ package sources
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -20,6 +21,7 @@ type SyslogReceiver struct {
 
 	mu       sync.Mutex
 	listener interface{} // net.PacketConn for UDP, net.Listener for TCP
+	conns    map[net.Conn]struct{}
 	running  bool
 	wg       sync.WaitGroup
 }
@@ -29,6 +31,7 @@ func NewSyslogReceiver(addr string, protocol string) *SyslogReceiver {
 	return &SyslogReceiver{
 		addr:     addr,
 		protocol: strings.ToLower(protocol),
+		conns:    make(map[net.Conn]struct{}),
 	}
 }
 
@@ -96,6 +99,10 @@ func (sr *SyslogReceiver) readUDP(ctx context.Context, conn *net.UDPConn, out ch
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					continue
 				}
+				// Connection closed by Stop
+				if errors.Is(err, net.ErrClosed) {
+					return
+				}
 				// Log error but continue
 				fmt.Printf("Error reading UDP: %v\n", err)
 				continue
@@ -154,10 +161,24 @@ func (sr *SyslogReceiver) acceptTCP(ctx context.Context, listener net.Listener, 
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					continue
 				}
+				// Listener closed by Stop
+				if errors.Is(err, net.ErrClosed) {
+					return
+				}
 				// Log error but continue
 				fmt.Printf("Error accepting connection: %v\n", err)
 				continue
 			}
+
+			// Track connection so Stop can close it
+			sr.mu.Lock()
+			if !sr.running {
+				sr.mu.Unlock()
+				conn.Close()
+				return
+			}
+			sr.conns[conn] = struct{}{}
+			sr.mu.Unlock()
 
 			// Handle connection in separate goroutine
 			sr.wg.Add(1)
@@ -169,7 +190,12 @@ func (sr *SyslogReceiver) acceptTCP(ctx context.Context, listener net.Listener, 
 // handleTCPConnection handles a single TCP connection
 func (sr *SyslogReceiver) handleTCPConnection(ctx context.Context, conn net.Conn, out chan<- *models.LogEntry) {
 	defer sr.wg.Done()
-	defer conn.Close()
+	defer func() {
+		sr.mu.Lock()
+		delete(sr.conns, conn)
+		sr.mu.Unlock()
+		conn.Close()
+	}()
 
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 4096), 65536)
@@ -182,7 +208,7 @@ func (sr *SyslogReceiver) handleTCPConnection(ctx context.Context, conn net.Conn
 			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
 			if !scanner.Scan() {
-				if err := scanner.Err(); err != nil {
+				if err := scanner.Err(); err != nil && !errors.Is(err, net.ErrClosed) {
 					fmt.Printf("Error scanning TCP: %v\n", err)
 				}
 				return
@@ -246,9 +272,8 @@ func (sr *SyslogReceiver) parseSyslogMessage(raw string) *models.LogEntry {
 // Stop stops the receiver
 func (sr *SyslogReceiver) Stop() error {
 	sr.mu.Lock()
-	defer sr.mu.Unlock()
-
 	if !sr.running {
+		sr.mu.Unlock()
 		return nil
 	}
 
@@ -264,7 +289,13 @@ func (sr *SyslogReceiver) Stop() error {
 		}
 	}
 
-	// Wait for goroutines
+	// Close open TCP connections
+	for conn := range sr.conns {
+		conn.Close()
+	}
+	sr.mu.Unlock()
+
+	// Wait for goroutines (without holding mu, handlers need it to deregister)
 	sr.wg.Wait()
 
 	return nil
