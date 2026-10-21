@@ -44,10 +44,11 @@ type Stats struct {
 
 // New creates a Stats keeping retention worth of minutes (default 24h)
 func New(retention time.Duration) *Stats {
-	return newWithClock(retention, time.Now)
+	return NewWithClock(retention, time.Now)
 }
 
-func newWithClock(retention time.Duration, now func() time.Time) *Stats {
+// NewWithClock is New with a custom clock (for tests and simulations)
+func NewWithClock(retention time.Duration, now func() time.Time) *Stats {
 	if retention <= 0 {
 		retention = 24 * time.Hour
 	}

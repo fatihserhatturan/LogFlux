@@ -16,7 +16,7 @@ func e(source string, level models.LogLevel) *models.LogEntry {
 
 func TestStats_CountAndRange(t *testing.T) {
 	now := time.Date(2026, 10, 21, 10, 0, 30, 0, time.UTC)
-	s := newWithClock(time.Hour, func() time.Time { return now })
+	s := NewWithClock(time.Hour, func() time.Time { return now })
 
 	_ = s.Write(e("api", models.LevelError))
 	_ = s.Write(e("api", models.LevelError))
@@ -59,7 +59,7 @@ func TestStats_CountAndRange(t *testing.T) {
 
 func TestStats_Prune(t *testing.T) {
 	now := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
-	s := newWithClock(10*time.Minute, func() time.Time { return now })
+	s := NewWithClock(10*time.Minute, func() time.Time { return now })
 	_ = s.Write(e("old", models.LevelInfo))
 	now = now.Add(time.Hour)
 	_ = s.Write(e("new", models.LevelInfo))

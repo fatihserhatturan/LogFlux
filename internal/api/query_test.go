@@ -155,15 +155,22 @@ func TestAPI_TailBacklogLiveAndShutdown(t *testing.T) {
 		t.Fatalf("content type %q", ct)
 	}
 
+	// Parse SSE strictly: an event is only delivered at the blank line
 	lines := make(chan string, 10)
 	go func() {
 		sc := bufio.NewScanner(resp.Body)
+		var data string
 		for sc.Scan() {
-			if line := sc.Text(); strings.HasPrefix(line, "data: ") {
+			line := sc.Text()
+			switch {
+			case strings.HasPrefix(line, "data: "):
+				data = strings.TrimPrefix(line, "data: ")
+			case line == "" && data != "":
 				var e models.LogEntry
-				if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &e) == nil {
+				if json.Unmarshal([]byte(data), &e) == nil {
 					lines <- e.Message
 				}
+				data = ""
 			}
 		}
 		close(lines)

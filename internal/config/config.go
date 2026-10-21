@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/fatihserhatturan/logflux/internal/parser"
+	"github.com/fatihserhatturan/logflux/pkg/models"
 )
 
 // Source types
@@ -25,7 +26,65 @@ type Config struct {
 	BufferSize int            `json:"buffer_size"`
 	API        APIConfig      `json:"api"`
 	Storage    StorageConfig  `json:"storage"`
+	Detect     DetectConfig   `json:"detect"`
+	Notify     []NotifyConfig `json:"notify"`
 	Sources    []SourceConfig `json:"sources"`
+}
+
+// DetectConfig configures anomaly detection
+type DetectConfig struct {
+	Disabled   bool             `json:"disabled,omitempty"`
+	Warmup     Duration         `json:"warmup,omitempty"`   // default 1h
+	Cooldown   Duration         `json:"cooldown,omitempty"` // default 10m
+	NewPattern NewPatternConfig `json:"new_pattern"`
+	Spike      SpikeConfig      `json:"spike"`
+	Silence    SilenceConfig    `json:"silence"`
+	Rules      []RuleConfig     `json:"rules,omitempty"`
+}
+
+// NewPatternConfig configures new-template alerts
+type NewPatternConfig struct {
+	Disabled bool   `json:"disabled,omitempty"`
+	MinLevel string `json:"min_level,omitempty"` // default warning
+}
+
+// SpikeConfig configures error-rate spike alerts
+type SpikeConfig struct {
+	Disabled   bool     `json:"disabled,omitempty"`
+	Levels     []string `json:"levels,omitempty"`      // default error, critical
+	Threshold  float64  `json:"threshold,omitempty"`   // robust z-score, default 3.5
+	MinCount   int64    `json:"min_count,omitempty"`   // default 10 per minute
+	History    int      `json:"history,omitempty"`     // minutes, default 60
+	MinHistory int      `json:"min_history,omitempty"` // minutes, default 10
+}
+
+// SilenceConfig configures silent-source alerts
+type SilenceConfig struct {
+	Disabled bool     `json:"disabled,omitempty"`
+	After    Duration `json:"after,omitempty"`    // default 5m
+	MinRate  float64  `json:"min_rate,omitempty"` // entries/minute, default 1
+}
+
+// RuleConfig is a threshold rule: alert when Threshold entries matching
+// the filter arrive within Window
+type RuleConfig struct {
+	Name      string            `json:"name"`
+	Q         string            `json:"q,omitempty"`
+	Sources   []string          `json:"sources,omitempty"`
+	Levels    []string          `json:"levels,omitempty"`
+	MinLevel  string            `json:"min_level,omitempty"`
+	Fields    map[string]string `json:"fields,omitempty"`
+	Window    Duration          `json:"window"`
+	Threshold int               `json:"threshold"`
+	GroupBy   string            `json:"group_by,omitempty"`
+	Severity  string            `json:"severity,omitempty"` // default warning
+}
+
+// NotifyConfig configures an alert destination
+type NotifyConfig struct {
+	Type   string `json:"type"`             // stdout or webhook
+	URL    string `json:"url,omitempty"`    // webhook
+	Format string `json:"format,omitempty"` // webhook: json (default) or slack
 }
 
 // StorageConfig configures on-disk storage of entries
@@ -141,6 +200,13 @@ func (c *Config) ApplyDefaults() {
 	if c.Storage.FlushInterval.Duration <= 0 {
 		c.Storage.FlushInterval.Duration = time.Second
 	}
+	if c.Detect.Cooldown.Duration <= 0 {
+		c.Detect.Cooldown.Duration = 10 * time.Minute
+	}
+	for i := range c.Notify {
+		c.Notify[i].Type = strings.ToLower(c.Notify[i].Type)
+		c.Notify[i].Format = strings.ToLower(c.Notify[i].Format)
+	}
 	for i := range c.Sources {
 		s := &c.Sources[i]
 		s.Type = strings.ToLower(s.Type)
@@ -164,6 +230,24 @@ func (c *Config) ApplyDefaults() {
 func (c *Config) Validate() error {
 	if len(c.Sources) == 0 {
 		return fmt.Errorf("config: at least one source is required")
+	}
+	if err := c.validateDetect(); err != nil {
+		return err
+	}
+	for i, n := range c.Notify {
+		where := fmt.Sprintf("config: notify[%d]", i)
+		switch n.Type {
+		case "stdout":
+		case "webhook":
+			if !strings.HasPrefix(n.URL, "http://") && !strings.HasPrefix(n.URL, "https://") {
+				return fmt.Errorf("%s: webhook url must start with http:// or https://", where)
+			}
+			if n.Format != "" && n.Format != "json" && n.Format != "slack" {
+				return fmt.Errorf("%s: format must be json or slack", where)
+			}
+		default:
+			return fmt.Errorf("%s: unknown type %q (want stdout or webhook)", where, n.Type)
+		}
 	}
 	names := make(map[string]bool)
 	for i, s := range c.Sources {
@@ -197,6 +281,47 @@ func (c *Config) Validate() error {
 		}
 		if s.Multiline && s.Type != SourceFile {
 			return fmt.Errorf("%s: multiline is only supported for file sources", where)
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateDetect() error {
+	d := c.Detect
+	checkLevel := func(where, l string) error {
+		if l == "" {
+			return nil
+		}
+		if _, ok := models.LookupLevel(l); !ok {
+			return fmt.Errorf("config: %s: unknown level %q", where, l)
+		}
+		return nil
+	}
+	if err := checkLevel("detect.new_pattern.min_level", d.NewPattern.MinLevel); err != nil {
+		return err
+	}
+	for _, l := range d.Spike.Levels {
+		if err := checkLevel("detect.spike.levels", l); err != nil {
+			return err
+		}
+	}
+	names := make(map[string]bool)
+	for i, r := range d.Rules {
+		where := fmt.Sprintf("detect.rules[%d]", i)
+		if r.Name == "" {
+			return fmt.Errorf("config: %s: name is required", where)
+		}
+		if names[r.Name] {
+			return fmt.Errorf("config: %s: duplicate rule name %q", where, r.Name)
+		}
+		names[r.Name] = true
+		if r.Window.Duration <= 0 || r.Threshold <= 0 {
+			return fmt.Errorf("config: %s (%s): window and threshold must be positive", where, r.Name)
+		}
+		for _, l := range append(append([]string{}, r.Levels...), r.MinLevel, r.Severity) {
+			if err := checkLevel(where, l); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

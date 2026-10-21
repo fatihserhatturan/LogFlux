@@ -93,3 +93,69 @@ func TestApp_FileToStdoutAndMetrics(t *testing.T) {
 		t.Errorf("data dir not created: %v", err)
 	}
 }
+
+func TestApp_DetectsNewErrorPattern(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "app.log")
+	if err := os.WriteFile(logFile, []byte("INFO service started\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.DataDir = filepath.Join(dir, "data")
+	cfg.API.Addr = "127.0.0.1:0"
+	cfg.Detect.Warmup.Duration = time.Nanosecond
+	cfg.Sources = []config.SourceConfig{{Type: config.SourceFile, Name: "app", Path: logFile, Parser: "auto"}}
+
+	alerts := &syncBuffer{}
+	a, err := New(cfg, Options{Alerts: alerts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- a.Run(ctx) }()
+
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString("ERROR disk failure on volume 3\n")
+	_ = f.Close()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(alerts.String(), "[NEW_PATTERN]") {
+		if time.Now().After(deadline) {
+			t.Fatalf("no new_pattern alert, notifier output: %q", alerts.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	base := "http://" + a.API().Addr()
+	for path, want := range map[string]string{
+		"/api/alerts?kind=new_pattern":   `ERROR disk failure on volume <NUM>`,
+		"/api/templates?min_level=error": `"template":"ERROR disk failure on volume <NUM>"`,
+		"/api/query?field.template_id=2": `"message":"ERROR disk failure on volume 3"`,
+	} {
+		resp, err := http.Get(base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if !strings.Contains(string(body), want) {
+			t.Errorf("%s: missing %q in\n%s", path, want, body)
+		}
+	}
+
+	cancel()
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.DataDir, "templates.json")); err != nil {
+		t.Errorf("templates not saved on shutdown: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.DataDir, "alerts.jsonl")); err != nil {
+		t.Errorf("alerts not persisted: %v", err)
+	}
+}

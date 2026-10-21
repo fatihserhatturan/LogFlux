@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -18,6 +20,8 @@ const (
 	defaultLimit = 100
 	maxLimit     = 10000
 )
+
+var errBadLimit = errors.New("limit must be a positive number")
 
 // EnableStorage registers /api/query, /api/tail and /api/segments
 func (s *Server) EnableStorage(store *storage.Store) {
@@ -131,15 +135,17 @@ func (s *Server) handleTail(w http.ResponseWriter, r *http.Request, store *stora
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
 	send := func(e *models.LogEntry) bool {
-		data, err := json.Marshal(e)
-		if err != nil {
+		buf.Reset()
+		if err := enc.Encode(e); err != nil {
 			return true
 		}
-		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
-			return false
-		}
-		return true
+		// An SSE event ends with a blank line
+		_, err := fmt.Fprintf(w, "data: %s\n\n", bytes.TrimRight(buf.Bytes(), "\n"))
+		return err == nil
 	}
 	for _, e := range store.Ring().Last(backlog, &q) {
 		if !send(e) {
@@ -213,16 +219,8 @@ func parseQuery(v url.Values, now time.Time) (storage.Query, error) {
 			q.Fields[name] = vals[0]
 		}
 	}
-	q.Limit = defaultLimit
-	if raw := v.Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n <= 0 {
-			return q, fmt.Errorf("limit must be a positive number")
-		}
-		if n > maxLimit {
-			n = maxLimit
-		}
-		q.Limit = n
+	if q.Limit, err = parseLimit(v.Get("limit")); err != nil {
+		return q, err
 	}
 	return q, nil
 }

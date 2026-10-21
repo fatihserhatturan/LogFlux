@@ -2,6 +2,16 @@
   "data_dir": "./data",
   "buffer_size": 10000,
   "api": { "addr": ":9090" },
+  "storage": { "retention_max_age": "168h" },
+  "detect": {
+    "warmup": "1h",
+    "rules": [
+      { "name": "ssh-bruteforce", "q": "failed password", "window": "5m", "threshold": 10, "group_by": "host" }
+    ]
+  },
+  "notify": [
+    { "type": "stdout" }
+  ],
   "sources": [
     { "type": "file", "name": "app", "path": "./logs/*.log", "parser": "auto", "multiline": true },
     { "type": "syslog", "name": "syslog-udp", "protocol": "udp", "addr": ":5140" },

@@ -36,6 +36,13 @@ func TestParse_Errors(t *testing.T) {
 		{"unknown field", `{"sorces":[]}`, "unknown field"},
 		{"bad parser", `{"sources":[{"type":"file","path":"x","parser":"xml"}]}`, "unknown parser"},
 		{"multiline on http", `{"sources":[{"type":"http","addr":":1","multiline":true}]}`, "only supported for file"},
+		{"rule without name", `{"detect":{"rules":[{"window":"5m","threshold":3}]},"sources":[{"type":"http","addr":":1"}]}`, "name is required"},
+		{"rule without window", `{"detect":{"rules":[{"name":"r","threshold":3}]},"sources":[{"type":"http","addr":":1"}]}`, "window and threshold"},
+		{"rule bad level", `{"detect":{"rules":[{"name":"r","window":"1m","threshold":3,"min_level":"loud"}]},"sources":[{"type":"http","addr":":1"}]}`, "unknown level"},
+		{"spike bad level", `{"detect":{"spike":{"levels":["nope"]}},"sources":[{"type":"http","addr":":1"}]}`, "unknown level"},
+		{"webhook without url", `{"notify":[{"type":"webhook"}],"sources":[{"type":"http","addr":":1"}]}`, "must start with http"},
+		{"webhook bad format", `{"notify":[{"type":"webhook","url":"https://x","format":"xml"}],"sources":[{"type":"http","addr":":1"}]}`, "json or slack"},
+		{"bad notify type", `{"notify":[{"type":"email"}],"sources":[{"type":"http","addr":":1"}]}`, "unknown type"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
