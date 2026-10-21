@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/fatihserhatturan/logflux/internal/parser"
 )
 
 // Source types
@@ -37,6 +39,12 @@ type SourceConfig struct {
 	Path     string `json:"path,omitempty"`     // file
 	Protocol string `json:"protocol,omitempty"` // syslog: udp|tcp
 	Addr     string `json:"addr,omitempty"`     // syslog, http
+
+	// Parser is the line format: auto, json, logfmt, plain or none.
+	// Defaults to auto for files and none for syslog/http (already structured).
+	Parser string `json:"parser,omitempty"`
+	// Multiline joins stack-trace continuation lines (file only)
+	Multiline bool `json:"multiline,omitempty"`
 }
 
 // Duration is a time.Duration that unmarshals from strings like "5m"
@@ -120,6 +128,12 @@ func (c *Config) ApplyDefaults() {
 		if s.Type == SourceSyslog && s.Protocol == "" {
 			s.Protocol = "udp"
 		}
+		if s.Parser == "" {
+			s.Parser = parser.FormatNone
+			if s.Type == SourceFile {
+				s.Parser = parser.FormatAuto
+			}
+		}
 	}
 }
 
@@ -154,6 +168,12 @@ func (c *Config) Validate() error {
 			}
 		default:
 			return fmt.Errorf("%s: unknown type %q (want file, syslog or http)", where, s.Type)
+		}
+		if !parser.ValidFormat(s.Parser) {
+			return fmt.Errorf("%s: unknown parser %q (want auto, json, logfmt, plain or none)", where, s.Parser)
+		}
+		if s.Multiline && s.Type != SourceFile {
+			return fmt.Errorf("%s: multiline is only supported for file sources", where)
 		}
 	}
 	return nil

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/fatihserhatturan/logflux/internal/api"
@@ -13,6 +14,7 @@ import (
 	"github.com/fatihserhatturan/logflux/internal/collector/sources"
 	"github.com/fatihserhatturan/logflux/internal/config"
 	"github.com/fatihserhatturan/logflux/internal/metrics"
+	"github.com/fatihserhatturan/logflux/internal/parser"
 	"github.com/fatihserhatturan/logflux/internal/pipeline"
 	"github.com/fatihserhatturan/logflux/internal/sinks"
 )
@@ -43,12 +45,25 @@ func New(cfg *config.Config, opts Options) (*App, error) {
 		api: api.New(cfg.API.Addr, reg),
 	}
 
+	checkpoints, err := sources.LoadCheckpoints(filepath.Join(cfg.DataDir, "checkpoints.json"))
+	if err != nil {
+		return nil, err
+	}
+
 	for _, sc := range cfg.Sources {
-		src, err := newSource(sc)
+		src, err := newSource(sc, checkpoints)
 		if err != nil {
 			return nil, err
 		}
-		a.pipeline.AddInput(pipeline.Input{Name: sc.Name, Source: src})
+		var procs []pipeline.Processor
+		if sc.Parser != parser.FormatNone {
+			lp, err := parser.NewLineParser(sc.Parser)
+			if err != nil {
+				return nil, err
+			}
+			procs = append(procs, lp)
+		}
+		a.pipeline.AddInput(pipeline.Input{Name: sc.Name, Source: src, Processors: procs})
 	}
 
 	if opts.Stdout != nil {
@@ -79,11 +94,13 @@ func (a *App) Run(ctx context.Context) error {
 	return a.pipeline.Run(ctx)
 }
 
-func newSource(sc config.SourceConfig) (collector.Source, error) {
+func newSource(sc config.SourceConfig, checkpoints *sources.Checkpoints) (collector.Source, error) {
 	switch sc.Type {
 	case config.SourceFile:
 		r := sources.NewFileReader(sc.Path)
 		r.SourceName = sc.Name
+		r.Multiline = sc.Multiline
+		r.Checkpoints = checkpoints
 		return r, nil
 	case config.SourceSyslog:
 		r := sources.NewSyslogReceiver(sc.Addr, sc.Protocol)

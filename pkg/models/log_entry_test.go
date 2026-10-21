@@ -80,6 +80,9 @@ func TestParseLevel(t *testing.T) {
 		{"CRITICAL", LevelCritical},
 		{"crit", LevelCritical},
 		{" Error ", LevelError},
+		{"fatal", LevelCritical},
+		{"trace", LevelDebug},
+		{"notice", LevelInfo},
 		{"", LevelInfo},
 		{"unknown", LevelInfo},
 	}
@@ -90,5 +93,20 @@ func TestParseLevel(t *testing.T) {
 				t.Errorf("ParseLevel(%q) = %s, want %s", tt.input, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestLookupLevel_Unknown(t *testing.T) {
+	if _, ok := LookupLevel("hello"); ok {
+		t.Error("expected unknown level")
+	}
+}
+
+func TestLogLevel_Severity(t *testing.T) {
+	order := []LogLevel{LevelDebug, LevelInfo, LevelWarning, LevelError, LevelCritical}
+	for i := 1; i < len(order); i++ {
+		if order[i-1].Severity() >= order[i].Severity() {
+			t.Errorf("%s should rank below %s", order[i-1], order[i])
+		}
 	}
 }

@@ -41,17 +41,45 @@ func NewLogEntry() *LogEntry {
 // ParseLevel converts a level name (case-insensitive) to a LogLevel.
 // Unknown values default to INFO.
 func ParseLevel(s string) LogLevel {
+	if l, ok := LookupLevel(s); ok {
+		return l
+	}
+	return LevelInfo
+}
+
+// LookupLevel converts a level name (case-insensitive) to a LogLevel and
+// reports whether the name was recognised. Common aliases from other logging
+// libraries (FATAL, TRACE, NOTICE, ...) are mapped to the closest level.
+func LookupLevel(s string) (LogLevel, bool) {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
-	case "DEBUG":
-		return LevelDebug
-	case "WARNING", "WARN":
-		return LevelWarning
-	case "ERROR", "ERR":
-		return LevelError
-	case "CRITICAL", "CRIT":
-		return LevelCritical
+	case "TRACE", "DEBUG", "DBG":
+		return LevelDebug, true
+	case "INFO", "INFORMATION", "NOTICE", "INF":
+		return LevelInfo, true
+	case "WARNING", "WARN", "WRN":
+		return LevelWarning, true
+	case "ERROR", "ERR", "SEVERE":
+		return LevelError, true
+	case "CRITICAL", "CRIT", "FATAL", "PANIC", "EMERG", "EMERGENCY", "ALERT":
+		return LevelCritical, true
 	default:
-		return LevelInfo
+		return "", false
+	}
+}
+
+// Severity returns a numeric rank for comparisons (DEBUG=0 ... CRITICAL=4)
+func (l LogLevel) Severity() int {
+	switch l {
+	case LevelDebug:
+		return 0
+	case LevelWarning:
+		return 2
+	case LevelError:
+		return 3
+	case LevelCritical:
+		return 4
+	default:
+		return 1
 	}
 }
 

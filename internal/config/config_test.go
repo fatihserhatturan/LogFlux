@@ -16,7 +16,7 @@ func TestParse_Defaults(t *testing.T) {
 		t.Errorf("unexpected defaults: %+v", cfg)
 	}
 	s := cfg.Sources[0]
-	if s.Type != "syslog" || s.Protocol != "udp" || s.Name != "syslog-1" {
+	if s.Type != "syslog" || s.Protocol != "udp" || s.Name != "syslog-1" || s.Parser != "none" {
 		t.Errorf("unexpected source defaults: %+v", s)
 	}
 }
@@ -34,6 +34,8 @@ func TestParse_Errors(t *testing.T) {
 		{"http without addr", `{"sources":[{"type":"http"}]}`, "addr is required"},
 		{"duplicate names", `{"sources":[{"type":"http","name":"a","addr":":1"},{"type":"http","name":"a","addr":":2"}]}`, "duplicate"},
 		{"unknown field", `{"sorces":[]}`, "unknown field"},
+		{"bad parser", `{"sources":[{"type":"file","path":"x","parser":"xml"}]}`, "unknown parser"},
+		{"multiline on http", `{"sources":[{"type":"http","addr":":1","multiline":true}]}`, "only supported for file"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -3,7 +3,7 @@
   "buffer_size": 10000,
   "api": { "addr": ":9090" },
   "sources": [
-    { "type": "file", "name": "app", "path": "./logs/app.log" },
+    { "type": "file", "name": "app", "path": "./logs/*.log", "parser": "auto", "multiline": true },
     { "type": "syslog", "name": "syslog-udp", "protocol": "udp", "addr": ":5140" },
     { "type": "syslog", "name": "syslog-tcp", "protocol": "tcp", "addr": ":5140" },
     { "type": "http", "name": "ingest", "addr": ":8080" }

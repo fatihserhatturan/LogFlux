@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/fatihserhatturan/logflux/internal/collector"
+	"github.com/fatihserhatturan/logflux/internal/parser"
 	"github.com/fatihserhatturan/logflux/pkg/models"
 )
 
@@ -208,6 +209,7 @@ func (sr *SyslogReceiver) handleTCPConnection(ctx context.Context, conn net.Conn
 
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 4096), 65536)
+	scanner.Split(parser.SplitSyslog)
 
 	for {
 		select {
@@ -239,45 +241,26 @@ func (sr *SyslogReceiver) handleTCPConnection(ctx context.Context, conn net.Conn
 	}
 }
 
-// parseSyslogMessage parses a basic syslog message
-// Format: <priority>timestamp hostname tag: message
-// For now, we'll do simple parsing. We'll improve this in the parser phase.
+// parseSyslogMessage parses an RFC 5424 / RFC 3164 message. Messages that
+// are not valid syslog are kept as plain text with keyword level detection.
 func (sr *SyslogReceiver) parseSyslogMessage(raw string) *models.LogEntry {
 	entry := models.NewLogEntry()
 	entry.Source = fmt.Sprintf("syslog:%s", sr.protocol)
 	if sr.SourceName != "" {
 		entry.Source = sr.SourceName
 	}
-	entry.Message = raw
-
-	// Try to extract priority (RFC 3164)
-	if strings.HasPrefix(raw, "<") {
-		endIdx := strings.Index(raw, ">")
-		if endIdx > 0 && endIdx < 10 {
-			// Priority found, extract it
-			entry.Fields["priority"] = raw[1:endIdx]
-			raw = raw[endIdx+1:]
-		}
-	}
-
-	// Store raw message for later parsing
+	raw = strings.TrimRight(raw, "\r\n\x00")
 	entry.Fields["raw"] = raw
 
-	// Simple level detection based on keywords
-	lowerMsg := strings.ToLower(raw)
-	switch {
-	case strings.Contains(lowerMsg, "crit") || strings.Contains(lowerMsg, "emerg") || strings.Contains(lowerMsg, "alert"):
-		entry.Level = models.LevelCritical
-	case strings.Contains(lowerMsg, "err") || strings.Contains(lowerMsg, "error"):
-		entry.Level = models.LevelError
-	case strings.Contains(lowerMsg, "warn"):
-		entry.Level = models.LevelWarning
-	case strings.Contains(lowerMsg, "debug"):
-		entry.Level = models.LevelDebug
-	default:
-		entry.Level = models.LevelInfo
+	msg, err := parser.ParseSyslog(raw, time.Now())
+	if err != nil {
+		entry.Message = raw
+		if level, ok := parser.DetectLevel(raw); ok {
+			entry.Level = level
+		}
+		return entry
 	}
-
+	msg.Apply(entry)
 	return entry
 }
 

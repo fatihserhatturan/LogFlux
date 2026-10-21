@@ -49,8 +49,17 @@ func TestSyslogReceiver_UDP(t *testing.T) {
 	// Read entry
 	select {
 	case entry := <-out:
-		if entry.Message != testMsg {
-			t.Errorf("Expected message %q, got %q", testMsg, entry.Message)
+		if want := "'su root' failed for user on /dev/pts/8"; entry.Message != want {
+			t.Errorf("Expected message %q, got %q", want, entry.Message)
+		}
+		if entry.Fields["raw"] != testMsg {
+			t.Errorf("Expected raw %q, got %q", testMsg, entry.Fields["raw"])
+		}
+		if entry.Fields["host"] != "mymachine" || entry.Fields["app"] != "su" {
+			t.Errorf("Expected host/app parsed, got %v", entry.Fields)
+		}
+		if entry.Level != models.LevelCritical {
+			t.Errorf("Expected CRITICAL from PRI 34 (severity 2), got %s", entry.Level)
 		}
 		if entry.Source != "syslog:udp" {
 			t.Errorf("Expected source 'syslog:udp', got %q", entry.Source)
@@ -159,11 +168,18 @@ func TestSyslogReceiver_LevelDetection(t *testing.T) {
 		message       string
 		expectedLevel models.LogLevel
 	}{
-		{"<34>Error occurred in system", models.LevelError},
-		{"<34>Warning: disk space low", models.LevelWarning},
-		{"<34>Critical system failure", models.LevelCritical},
-		{"<34>Debug information", models.LevelDebug},
-		{"<34>Normal operation", models.LevelInfo},
+		// Severity from PRI wins (PRI = facility*8 + severity)
+		{"<11>Something happened", models.LevelError},    // severity 3
+		{"<12>Something happened", models.LevelWarning},  // severity 4
+		{"<10>Something happened", models.LevelCritical}, // severity 2
+		{"<15>Something happened", models.LevelDebug},    // severity 7
+		{"<14>Something happened", models.LevelInfo},     // severity 6
+		// Without PRI, fall back to keyword detection
+		{"Error occurred in system", models.LevelError},
+		{"Warning: disk space low", models.LevelWarning},
+		{"Critical system failure", models.LevelCritical},
+		{"Debug information", models.LevelDebug},
+		{"Normal operation", models.LevelInfo},
 	}
 
 	for _, tt := range tests {
@@ -249,4 +265,39 @@ func BenchmarkSyslogReceiver_UDP(b *testing.B) {
 			conn.Write(testMsg)
 		}
 	})
+}
+
+func TestSyslogReceiver_TCPOctetCounting(t *testing.T) {
+	receiver := NewSyslogReceiver("127.0.0.1:0", "tcp")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := make(chan *models.LogEntry, 10)
+	if err := receiver.Start(ctx, out); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = receiver.Stop() }()
+
+	conn, err := net.Dial("tcp", receiver.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// Two octet-counted messages without newlines, one containing a newline
+	msg1 := "<11>1 2026-10-21T10:00:00Z host app 1 - - first"
+	msg2 := "<14>1 2026-10-21T10:00:01Z host app 1 - - line1\nline2"
+	if _, err := fmt.Fprintf(conn, "%d %s%d %s", len(msg1), msg1, len(msg2), msg2); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{"first", "line1\nline2"} {
+		select {
+		case e := <-out:
+			if e.Message != want {
+				t.Errorf("got %q, want %q", e.Message, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout")
+		}
+	}
 }
