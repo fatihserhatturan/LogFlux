@@ -17,6 +17,8 @@ import (
 	"github.com/fatihserhatturan/logflux/internal/parser"
 	"github.com/fatihserhatturan/logflux/internal/pipeline"
 	"github.com/fatihserhatturan/logflux/internal/sinks"
+	"github.com/fatihserhatturan/logflux/internal/stats"
+	"github.com/fatihserhatturan/logflux/internal/storage"
 )
 
 // Options tweaks how the app is built
@@ -30,6 +32,8 @@ type App struct {
 	metrics  *metrics.Registry
 	pipeline *pipeline.Pipeline
 	api      *api.Server
+	store    *storage.Store
+	stats    *stats.Stats
 }
 
 // New builds an app from cfg
@@ -43,6 +47,10 @@ func New(cfg *config.Config, opts Options) (*App, error) {
 			Metrics:    reg,
 		}),
 		api: api.New(cfg.API.Addr, reg),
+	}
+
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create data dir: %w", err)
 	}
 
 	checkpoints, err := sources.LoadCheckpoints(filepath.Join(cfg.DataDir, "checkpoints.json"))
@@ -66,10 +74,37 @@ func New(cfg *config.Config, opts Options) (*App, error) {
 		a.pipeline.AddInput(pipeline.Input{Name: sc.Name, Source: src, Processors: procs})
 	}
 
+	a.stats = stats.New(24 * time.Hour)
+	a.pipeline.AddSink("stats", a.stats)
+	a.api.EnableStats(a.stats)
+
+	if !cfg.Storage.Disabled {
+		sc := cfg.Storage
+		store, err := storage.Open(storage.Options{
+			Dir:              cfg.DataDir,
+			SegmentMaxSize:   sc.SegmentMaxSizeMB << 20,
+			SegmentMaxAge:    sc.SegmentMaxAge.Duration,
+			RetentionMaxAge:  sc.RetentionMaxAge.Duration,
+			RetentionMaxSize: sc.RetentionMaxSize << 20,
+			FlushInterval:    sc.FlushInterval.Duration,
+		})
+		if err != nil {
+			return nil, err
+		}
+		a.store = store
+		a.pipeline.AddSink("storage", store)
+		a.api.EnableStorage(store)
+	}
+
 	if opts.Stdout != nil {
 		a.pipeline.AddSink("stdout", sinks.NewStdout(opts.Stdout))
 	}
 	return a, nil
+}
+
+// Store returns the storage (nil when disabled)
+func (a *App) Store() *storage.Store {
+	return a.store
 }
 
 // API returns the API server (useful in tests)
@@ -79,10 +114,10 @@ func (a *App) API() *api.Server {
 
 // Run starts the API and pipeline and blocks until ctx is cancelled
 func (a *App) Run(ctx context.Context) error {
-	if err := os.MkdirAll(a.cfg.DataDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create data dir: %w", err)
-	}
 	if err := a.api.Start(); err != nil {
+		if a.store != nil {
+			_ = a.store.Close()
+		}
 		return err
 	}
 	defer func() {

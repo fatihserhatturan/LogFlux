@@ -20,6 +20,11 @@ type Server struct {
 	metrics *metrics.Registry
 	started time.Time
 
+	// baseCtx is the parent of every request context; cancelling it on
+	// shutdown ends long-lived streams (/api/tail)
+	baseCtx    context.Context
+	cancelBase context.CancelFunc
+
 	mu     sync.Mutex
 	server *http.Server
 	ln     net.Listener
@@ -33,6 +38,7 @@ func New(addr string, reg *metrics.Registry) *Server {
 		metrics: reg,
 		started: time.Now(),
 	}
+	s.baseCtx, s.cancelBase = context.WithCancel(context.Background())
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	return s
@@ -57,6 +63,7 @@ func (s *Server) Start() error {
 	srv := &http.Server{
 		Handler:           s.mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		BaseContext:       func(net.Listener) context.Context { return s.baseCtx },
 	}
 
 	s.mu.Lock()
@@ -87,6 +94,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	srv := s.server
 	s.mu.Unlock()
+	s.cancelBase()
 	if srv == nil {
 		return nil
 	}

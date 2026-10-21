@@ -72,9 +72,22 @@ func TestApp_FileToStdoutAndMetrics(t *testing.T) {
 		t.Errorf("metrics missing received counter:\n%s", body)
 	}
 
+	resp, err = http.Get("http://" + a.API().Addr() + "/api/query?source=app&q=WORLD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if !strings.Contains(string(body), `"count":1`) || !strings.Contains(string(body), `"message":"world"`) {
+		t.Errorf("query did not return stored entry:\n%s", body)
+	}
+
 	cancel()
 	if err := <-errCh; err != nil {
 		t.Fatal(err)
+	}
+	if segs := a.Store().Segments(); len(segs) != 1 || segs[0].Count != 2 || !segs[0].Closed {
+		t.Errorf("expected one closed segment with 2 entries, got %+v", segs)
 	}
 	if _, err := os.Stat(cfg.DataDir); err != nil {
 		t.Errorf("data dir not created: %v", err)

@@ -24,7 +24,18 @@ type Config struct {
 	DataDir    string         `json:"data_dir"`
 	BufferSize int            `json:"buffer_size"`
 	API        APIConfig      `json:"api"`
+	Storage    StorageConfig  `json:"storage"`
 	Sources    []SourceConfig `json:"sources"`
+}
+
+// StorageConfig configures on-disk storage of entries
+type StorageConfig struct {
+	Disabled         bool     `json:"disabled,omitempty"`
+	SegmentMaxSizeMB int64    `json:"segment_max_size_mb,omitempty"` // default 64
+	SegmentMaxAge    Duration `json:"segment_max_age,omitempty"`     // default 1h
+	RetentionMaxAge  Duration `json:"retention_max_age,omitempty"`   // default 168h unless retention_max_size_mb is set
+	RetentionMaxSize int64    `json:"retention_max_size_mb,omitempty"`
+	FlushInterval    Duration `json:"flush_interval,omitempty"` // default 1s
 }
 
 // APIConfig configures the query/metrics HTTP server
@@ -117,6 +128,18 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.API.Addr == "" {
 		c.API.Addr = ":9090"
+	}
+	if c.Storage.SegmentMaxSizeMB <= 0 {
+		c.Storage.SegmentMaxSizeMB = 64
+	}
+	if c.Storage.SegmentMaxAge.Duration <= 0 {
+		c.Storage.SegmentMaxAge.Duration = time.Hour
+	}
+	if c.Storage.RetentionMaxAge.Duration <= 0 && c.Storage.RetentionMaxSize <= 0 {
+		c.Storage.RetentionMaxAge.Duration = 7 * 24 * time.Hour
+	}
+	if c.Storage.FlushInterval.Duration <= 0 {
+		c.Storage.FlushInterval.Duration = time.Second
 	}
 	for i := range c.Sources {
 		s := &c.Sources[i]
