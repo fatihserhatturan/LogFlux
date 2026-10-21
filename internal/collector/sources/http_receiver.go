@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fatihserhatturan/logflux/internal/collector"
@@ -25,12 +26,12 @@ type httpLog struct {
 }
 
 // toEntry converts an HTTP payload into a log entry
-func (l httpLog) toEntry() *models.LogEntry {
+func (l httpLog) toEntry(defaultSource string) *models.LogEntry {
 	entry := models.NewLogEntry()
 	entry.Message = l.Message
 	entry.Source = l.Source
 	if entry.Source == "" {
-		entry.Source = "http"
+		entry.Source = defaultSource
 	}
 	entry.Level = models.ParseLevel(l.Level)
 	if l.Fields != nil {
@@ -41,12 +42,16 @@ func (l httpLog) toEntry() *models.LogEntry {
 
 // HTTPReceiver receives logs via HTTP POST
 type HTTPReceiver struct {
+	// SourceName is the entry source used when the payload has none (defaults to "http")
+	SourceName string
+
 	addr   string
 	server *http.Server
 
 	mu      sync.Mutex
 	running bool
 	out     chan<- *models.LogEntry
+	dropped atomic.Int64
 }
 
 // NewHTTPReceiver creates a new HTTP receiver
@@ -127,7 +132,7 @@ func (hr *HTTPReceiver) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry := logData.toEntry()
+	entry := logData.toEntry(hr.defaultSource())
 
 	// Send to channel
 	select {
@@ -138,6 +143,7 @@ func (hr *HTTPReceiver) handleLogs(w http.ResponseWriter, r *http.Request) {
 			"id":     entry.ID,
 		})
 	default:
+		hr.dropped.Add(1)
 		http.Error(w, "Channel full", http.StatusServiceUnavailable)
 	}
 }
@@ -163,13 +169,14 @@ func (hr *HTTPReceiver) handleBatch(w http.ResponseWriter, r *http.Request) {
 
 	accepted := 0
 	for _, logData := range logs {
-		entry := logData.toEntry()
+		entry := logData.toEntry(hr.defaultSource())
 
 		select {
 		case hr.out <- entry:
 			accepted++
 		default:
 			// Channel full, skip
+			hr.dropped.Add(1)
 		}
 	}
 
@@ -208,6 +215,18 @@ func (hr *HTTPReceiver) Stop() error {
 	}
 
 	return nil
+}
+
+func (hr *HTTPReceiver) defaultSource() string {
+	if hr.SourceName != "" {
+		return hr.SourceName
+	}
+	return "http"
+}
+
+// Dropped returns the number of entries rejected because the queue was full
+func (hr *HTTPReceiver) Dropped() int64 {
+	return hr.dropped.Load()
 }
 
 // Addr returns the actual listening address

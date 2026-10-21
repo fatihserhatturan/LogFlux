@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fatihserhatturan/logflux/internal/collector"
@@ -19,6 +20,9 @@ var _ collector.Source = (*SyslogReceiver)(nil)
 
 // SyslogReceiver receives syslog messages over UDP or TCP
 type SyslogReceiver struct {
+	// SourceName overrides the entry source (defaults to "syslog:<protocol>")
+	SourceName string
+
 	addr     string
 	protocol string // "udp" or "tcp"
 
@@ -27,6 +31,7 @@ type SyslogReceiver struct {
 	conns    map[net.Conn]struct{}
 	running  bool
 	wg       sync.WaitGroup
+	dropped  atomic.Int64
 }
 
 // NewSyslogReceiver creates a new syslog receiver
@@ -115,10 +120,11 @@ func (sr *SyslogReceiver) readUDP(ctx context.Context, conn *net.UDPConn, out ch
 				message := string(buffer[:n])
 				entry := sr.parseSyslogMessage(message)
 
+				// UDP cannot apply backpressure: drop when the queue is full
 				select {
 				case out <- entry:
-				case <-ctx.Done():
-					return
+				default:
+					sr.dropped.Add(1)
 				}
 			}
 		}
@@ -239,6 +245,9 @@ func (sr *SyslogReceiver) handleTCPConnection(ctx context.Context, conn net.Conn
 func (sr *SyslogReceiver) parseSyslogMessage(raw string) *models.LogEntry {
 	entry := models.NewLogEntry()
 	entry.Source = fmt.Sprintf("syslog:%s", sr.protocol)
+	if sr.SourceName != "" {
+		entry.Source = sr.SourceName
+	}
 	entry.Message = raw
 
 	// Try to extract priority (RFC 3164)
@@ -302,6 +311,24 @@ func (sr *SyslogReceiver) Stop() error {
 	sr.wg.Wait()
 
 	return nil
+}
+
+// Dropped returns the number of messages dropped because the queue was full
+func (sr *SyslogReceiver) Dropped() int64 {
+	return sr.dropped.Load()
+}
+
+// Addr returns the actual listening address
+func (sr *SyslogReceiver) Addr() string {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	switch l := sr.listener.(type) {
+	case *net.UDPConn:
+		return l.LocalAddr().String()
+	case net.Listener:
+		return l.Addr().String()
+	}
+	return sr.addr
 }
 
 // Name returns the source name

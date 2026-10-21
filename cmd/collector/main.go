@@ -2,138 +2,122 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
-	"time"
 
-	"github.com/fatihserhatturan/logflux/internal/collector/sources"
-	"github.com/fatihserhatturan/logflux/pkg/models"
+	"github.com/fatihserhatturan/logflux/internal/app"
+	"github.com/fatihserhatturan/logflux/internal/config"
 )
 
 func main() {
-	fmt.Println("🌊 LogFlux Collector - Starting...")
-
-	if len(os.Args) < 2 {
-		printUsage()
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
+}
 
-	mode := os.Args[1]
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	logChan := make(chan *models.LogEntry, 100)
-
-	var err error
-	switch mode {
-	case "file":
-		err = startFileMode(ctx, logChan)
-	case "syslog":
-		err = startSyslogMode(ctx, logChan)
-	case "http":
-		err = startHTTPMode(ctx, logChan)
-	default:
-		fmt.Printf("❌ Unknown mode: %s\n", mode)
-		printUsage()
-		os.Exit(1)
+func run(args []string) error {
+	fs := flag.NewFlagSet("logflux", flag.ContinueOnError)
+	fs.Usage = func() { printUsage(fs) }
+	configPath := fs.String("config", "", "path to JSON config file")
+	apiAddr := fs.String("api", "", "API listen address (overrides config, default :9090)")
+	dataDir := fs.String("data", "", "data directory (overrides config, default ./data)")
+	quiet := fs.Bool("quiet", false, "do not print entries to stdout")
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
 
+	cfg, err := loadConfig(*configPath, fs.Args())
 	if err != nil {
-		fmt.Printf("❌ Failed to start: %v\n", err)
-		os.Exit(1)
+		printUsage(fs)
+		return err
+	}
+	if *apiAddr != "" {
+		cfg.API.Addr = *apiAddr
+	}
+	if *dataDir != "" {
+		cfg.DataDir = *dataDir
 	}
 
-	fmt.Println("✅ Collector started, processing logs...")
-	fmt.Println("Press Ctrl+C to stop")
+	opts := app.Options{Stdout: os.Stdout}
+	if *quiet {
+		opts.Stdout = nil
+	}
+	a, err := app.New(cfg, opts)
+	if err != nil {
+		return err
+	}
 
-	go processLogs(logChan)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	<-sigChan
-	fmt.Println("\n🛑 Shutting down gracefully...")
-	cancel()
-	time.Sleep(500 * time.Millisecond)
-	fmt.Println("👋 Goodbye!")
+	fmt.Fprintf(os.Stderr, "🌊 LogFlux starting: %d source(s), API on %s\n", len(cfg.Sources), cfg.API.Addr)
+	if err := a.Run(ctx); err != nil {
+		return err
+	}
+	fmt.Fprintln(os.Stderr, "👋 Stopped")
+	return nil
 }
 
-func startFileMode(ctx context.Context, out chan<- *models.LogEntry) error {
-	if len(os.Args) < 3 {
-		return fmt.Errorf("file path required")
-	}
-
-	logFile := os.Args[2]
-	logFile = filepath.Clean(logFile)
-
-	if _, err := os.Stat(logFile); os.IsNotExist(err) {
-		absPath, _ := filepath.Abs(logFile)
-		return fmt.Errorf("file not found: %s (absolute: %s)", logFile, absPath)
-	}
-
-	fmt.Printf("📂 Reading from file: %s\n", logFile)
-
-	reader := sources.NewFileReader(logFile)
-	return reader.Start(ctx, out)
-}
-
-func startSyslogMode(ctx context.Context, out chan<- *models.LogEntry) error {
-	if len(os.Args) < 4 {
-		return fmt.Errorf("protocol and address required")
-	}
-
-	protocol := os.Args[2]
-	addr := os.Args[3]
-
-	fmt.Printf("📡 Starting syslog receiver: %s on %s\n", protocol, addr)
-
-	receiver := sources.NewSyslogReceiver(addr, protocol)
-	return receiver.Start(ctx, out)
-}
-
-func startHTTPMode(ctx context.Context, out chan<- *models.LogEntry) error {
-	if len(os.Args) < 3 {
-		return fmt.Errorf("address required")
-	}
-
-	addr := os.Args[2] // e.g., ":8080"
-
-	fmt.Printf("📡 Starting HTTP receiver on %s\n", addr)
-
-	receiver := sources.NewHTTPReceiver(addr)
-	return receiver.Start(ctx, out)
-}
-
-func processLogs(logChan <-chan *models.LogEntry) {
-	count := 0
-	for entry := range logChan {
-		count++
-		fmt.Printf("[%d] %s [%s] %s: %s",
-			count,
-			entry.Timestamp.Format(time.RFC3339),
-			entry.Level,
-			entry.Source,
-			entry.Message,
-		)
-		if len(entry.Message) > 0 && entry.Message[len(entry.Message)-1] != '\n' {
-			fmt.Println()
+// loadConfig reads the config file, or builds a single-source config from
+// the legacy "file|syslog|http" subcommands
+func loadConfig(path string, args []string) (*config.Config, error) {
+	if path != "" {
+		if len(args) > 0 {
+			return nil, fmt.Errorf("use either -config or a subcommand, not both")
 		}
+		return config.Load(path)
 	}
+	if len(args) == 0 {
+		return nil, fmt.Errorf("no config or source given")
+	}
+
+	cfg := config.Default()
+	var src config.SourceConfig
+	switch args[0] {
+	case "file":
+		if len(args) < 2 {
+			return nil, fmt.Errorf("file path required")
+		}
+		src = config.SourceConfig{Type: config.SourceFile, Name: "file", Path: args[1]}
+	case "syslog":
+		if len(args) < 3 {
+			return nil, fmt.Errorf("protocol and address required")
+		}
+		src = config.SourceConfig{Type: config.SourceSyslog, Name: "syslog", Protocol: args[1], Addr: args[2]}
+	case "http":
+		if len(args) < 2 {
+			return nil, fmt.Errorf("address required")
+		}
+		src = config.SourceConfig{Type: config.SourceHTTP, Name: "http", Addr: args[1]}
+	default:
+		return nil, fmt.Errorf("unknown mode: %s", args[0])
+	}
+	cfg.Sources = []config.SourceConfig{src}
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
-func printUsage() {
-	fmt.Println("Usage:")
-	fmt.Println("  File mode:   logflux file <path>")
-	fmt.Println("  Syslog mode: logflux syslog <udp|tcp> <address>")
-	fmt.Println("  HTTP mode:   logflux http <address>")
-	fmt.Println()
-	fmt.Println("Examples:")
-	fmt.Println("  logflux file /var/log/app.log")
-	fmt.Println("  logflux syslog udp :514")
-	fmt.Println("  logflux syslog tcp :514")
-	fmt.Println("  logflux http :8080")
+func printUsage(fs *flag.FlagSet) {
+	out := fs.Output()
+	fmt.Fprintln(out, "Usage:")
+	fmt.Fprintln(out, "  logflux [flags] -config <file.json>")
+	fmt.Fprintln(out, "  logflux [flags] file <path>")
+	fmt.Fprintln(out, "  logflux [flags] syslog <udp|tcp> <address>")
+	fmt.Fprintln(out, "  logflux [flags] http <address>")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Flags:")
+	fs.PrintDefaults()
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Examples:")
+	fmt.Fprintln(out, "  logflux -config logflux.example.json")
+	fmt.Fprintln(out, "  logflux file /var/log/app.log")
+	fmt.Fprintln(out, "  logflux syslog udp :5140")
+	fmt.Fprintln(out, "  logflux http :8080")
 }
