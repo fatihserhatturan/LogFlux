@@ -1,0 +1,14 @@
+version: "2"
+
+linters:
+  default: standard
+  exclusions:
+    rules:
+      # Tests and dev tools may ignore Close/Write errors
+      - path: (_test\.go|^tools/)
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

@@ -10,8 +10,34 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fatihserhatturan/logflux/internal/collector"
 	"github.com/fatihserhatturan/logflux/pkg/models"
 )
+
+var _ collector.Source = (*HTTPReceiver)(nil)
+
+// httpLog is the JSON payload accepted by /logs and /batch
+type httpLog struct {
+	Level   string                 `json:"level"`
+	Message string                 `json:"message"`
+	Source  string                 `json:"source"`
+	Fields  map[string]interface{} `json:"fields"`
+}
+
+// toEntry converts an HTTP payload into a log entry
+func (l httpLog) toEntry() *models.LogEntry {
+	entry := models.NewLogEntry()
+	entry.Message = l.Message
+	entry.Source = l.Source
+	if entry.Source == "" {
+		entry.Source = "http"
+	}
+	entry.Level = models.ParseLevel(l.Level)
+	if l.Fields != nil {
+		entry.Fields = l.Fields
+	}
+	return entry
+}
 
 // HTTPReceiver receives logs via HTTP POST
 type HTTPReceiver struct {
@@ -76,7 +102,7 @@ func (hr *HTTPReceiver) Start(ctx context.Context, out chan<- *models.LogEntry) 
 	// Wait for context cancellation
 	go func() {
 		<-ctx.Done()
-		hr.Stop()
+		_ = hr.Stop()
 	}()
 
 	return nil
@@ -89,61 +115,25 @@ func (hr *HTTPReceiver) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
 
-	// Parse JSON
-	var logData struct {
-		Level   string                 `json:"level"`
-		Message string                 `json:"message"`
-		Source  string                 `json:"source"`
-		Fields  map[string]interface{} `json:"fields"`
-	}
-
+	var logData httpLog
 	if err := json.Unmarshal(body, &logData); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
-	// Create log entry
-	entry := models.NewLogEntry()
-	entry.Message = logData.Message
-	entry.Source = logData.Source
-	if entry.Source == "" {
-		entry.Source = "http"
-	}
-
-	// Parse level
-	switch logData.Level {
-	case "DEBUG":
-		entry.Level = models.LevelDebug
-	case "INFO":
-		entry.Level = models.LevelInfo
-	case "WARNING", "WARN":
-		entry.Level = models.LevelWarning
-	case "ERROR":
-		entry.Level = models.LevelError
-	case "CRITICAL", "CRIT":
-		entry.Level = models.LevelCritical
-	default:
-		entry.Level = models.LevelInfo
-	}
-
-	// Add fields
-	if logData.Fields != nil {
-		entry.Fields = logData.Fields
-	}
+	entry := logData.toEntry()
 
 	// Send to channel
 	select {
 	case hr.out <- entry:
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"status": "accepted",
 			"id":     entry.ID,
 		})
@@ -164,15 +154,8 @@ func (hr *HTTPReceiver) handleBatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
 
-	var logs []struct {
-		Level   string                 `json:"level"`
-		Message string                 `json:"message"`
-		Source  string                 `json:"source"`
-		Fields  map[string]interface{} `json:"fields"`
-	}
-
+	var logs []httpLog
 	if err := json.Unmarshal(body, &logs); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
@@ -180,31 +163,7 @@ func (hr *HTTPReceiver) handleBatch(w http.ResponseWriter, r *http.Request) {
 
 	accepted := 0
 	for _, logData := range logs {
-		entry := models.NewLogEntry()
-		entry.Message = logData.Message
-		entry.Source = logData.Source
-		if entry.Source == "" {
-			entry.Source = "http"
-		}
-
-		switch logData.Level {
-		case "DEBUG":
-			entry.Level = models.LevelDebug
-		case "INFO":
-			entry.Level = models.LevelInfo
-		case "WARNING", "WARN":
-			entry.Level = models.LevelWarning
-		case "ERROR":
-			entry.Level = models.LevelError
-		case "CRITICAL", "CRIT":
-			entry.Level = models.LevelCritical
-		default:
-			entry.Level = models.LevelInfo
-		}
-
-		if logData.Fields != nil {
-			entry.Fields = logData.Fields
-		}
+		entry := logData.toEntry()
 
 		select {
 		case hr.out <- entry:
@@ -215,7 +174,7 @@ func (hr *HTTPReceiver) handleBatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":   "accepted",
 		"total":    len(logs),
 		"accepted": accepted,
@@ -225,7 +184,7 @@ func (hr *HTTPReceiver) handleBatch(w http.ResponseWriter, r *http.Request) {
 // handleHealth handles health check
 func (hr *HTTPReceiver) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status": "healthy",
 		"time":   time.Now().Format(time.RFC3339),
 	})

@@ -11,8 +11,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fatihserhatturan/logflux/internal/collector"
 	"github.com/fatihserhatturan/logflux/pkg/models"
 )
+
+var _ collector.Source = (*SyslogReceiver)(nil)
 
 // SyslogReceiver receives syslog messages over UDP or TCP
 type SyslogReceiver struct {
@@ -82,7 +85,7 @@ func (sr *SyslogReceiver) startUDP(ctx context.Context, out chan<- *models.LogEn
 // readUDP reads from UDP connection
 func (sr *SyslogReceiver) readUDP(ctx context.Context, conn *net.UDPConn, out chan<- *models.LogEntry) {
 	defer sr.wg.Done()
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	buffer := make([]byte, 4096)
 
@@ -92,7 +95,7 @@ func (sr *SyslogReceiver) readUDP(ctx context.Context, conn *net.UDPConn, out ch
 			return
 		default:
 			// Set read deadline to allow checking context
-			conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+			_ = conn.SetReadDeadline(time.Now().Add(1 * time.Second))
 
 			n, _, err := conn.ReadFromUDP(buffer)
 			if err != nil {
@@ -144,7 +147,7 @@ func (sr *SyslogReceiver) startTCP(ctx context.Context, out chan<- *models.LogEn
 // acceptTCP accepts TCP connections
 func (sr *SyslogReceiver) acceptTCP(ctx context.Context, listener net.Listener, out chan<- *models.LogEntry) {
 	defer sr.wg.Done()
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	for {
 		select {
@@ -153,7 +156,7 @@ func (sr *SyslogReceiver) acceptTCP(ctx context.Context, listener net.Listener, 
 		default:
 			// Set accept deadline
 			if tcpListener, ok := listener.(*net.TCPListener); ok {
-				tcpListener.SetDeadline(time.Now().Add(1 * time.Second))
+				_ = tcpListener.SetDeadline(time.Now().Add(1 * time.Second))
 			}
 
 			conn, err := listener.Accept()
@@ -174,7 +177,7 @@ func (sr *SyslogReceiver) acceptTCP(ctx context.Context, listener net.Listener, 
 			sr.mu.Lock()
 			if !sr.running {
 				sr.mu.Unlock()
-				conn.Close()
+				_ = conn.Close()
 				return
 			}
 			sr.conns[conn] = struct{}{}
@@ -194,7 +197,7 @@ func (sr *SyslogReceiver) handleTCPConnection(ctx context.Context, conn net.Conn
 		sr.mu.Lock()
 		delete(sr.conns, conn)
 		sr.mu.Unlock()
-		conn.Close()
+		_ = conn.Close()
 	}()
 
 	scanner := bufio.NewScanner(conn)
@@ -205,7 +208,7 @@ func (sr *SyslogReceiver) handleTCPConnection(ctx context.Context, conn net.Conn
 		case <-ctx.Done():
 			return
 		default:
-			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
 			if !scanner.Scan() {
 				if err := scanner.Err(); err != nil && !errors.Is(err, net.ErrClosed) {
@@ -283,15 +286,15 @@ func (sr *SyslogReceiver) Stop() error {
 	if sr.listener != nil {
 		switch l := sr.listener.(type) {
 		case *net.UDPConn:
-			l.Close()
+			_ = l.Close()
 		case net.Listener:
-			l.Close()
+			_ = l.Close()
 		}
 	}
 
 	// Close open TCP connections
 	for conn := range sr.conns {
-		conn.Close()
+		_ = conn.Close()
 	}
 	sr.mu.Unlock()
 

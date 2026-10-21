@@ -129,10 +129,10 @@ func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  File mode:   logflux file <path>")
 	fmt.Println("  Syslog mode: logflux syslog <udp|tcp> <address>")
-	fmt.Println("  HTTP mode:   logflux http <address>") // YENİ!
+	fmt.Println("  HTTP mode:   logflux http <address>")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  logflux file test/testdata/sample.log")
+	fmt.Println("  logflux file /var/log/app.log")
 	fmt.Println("  logflux syslog udp :514")
 	fmt.Println("  logflux syslog tcp :514")
 	fmt.Println("  logflux http :8080")

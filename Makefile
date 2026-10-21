@@ -1,18 +1,19 @@
-.PHONY: build test clean run lint help
+.PHONY: build test test-coverage bench clean run lint fmt deps docker-build docker-run help
 
 BINARY_NAME=logflux
 BUILD_DIR=bin
+IMAGE_NAME=logflux
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 build: ## Build the application
 	@echo "Building..."
-	go build -o $(BUILD_DIR)/$(BINARY_NAME) cmd/collector/main.go
+	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/collector
 
 run: ## Run the application
 	@echo "Running..."
-	go run cmd/collector/main.go
+	go run ./cmd/collector $(ARGS)
 
 test: ## Run tests
 	@echo "Testing..."
@@ -28,6 +29,9 @@ lint: ## Run linter
 	@echo "Linting..."
 	golangci-lint run
 
+fmt: ## Format code
+	gofmt -w .
+
 clean: ## Clean build files
 	@echo "Cleaning..."
 	rm -rf $(BUILD_DIR)
@@ -36,5 +40,11 @@ clean: ## Clean build files
 deps: ## Download dependencies
 	go mod download
 	go mod tidy
+
+docker-build: ## Build Docker image
+	docker build -t $(IMAGE_NAME) .
+
+docker-run: ## Run Docker image (HTTP mode on :8080)
+	docker run --rm -p 8080:8080 $(IMAGE_NAME) http :8080
 
 .DEFAULT_GOAL := help

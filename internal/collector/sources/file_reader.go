@@ -9,8 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fatihserhatturan/logflux/internal/collector"
 	"github.com/fatihserhatturan/logflux/pkg/models"
 )
+
+var _ collector.Source = (*FileReader)(nil)
 
 // FileReader reads logs from a file continuously
 type FileReader struct {
@@ -62,7 +65,7 @@ func (fr *FileReader) Start(ctx context.Context, out chan<- *models.LogEntry) er
 
 // readLoop continuously reads from file
 func (fr *FileReader) readLoop(ctx context.Context, out chan<- *models.LogEntry) {
-	defer fr.Stop()
+	defer func() { _ = fr.Stop() }()
 
 	reader := bufio.NewReader(fr.file)
 	ticker := time.NewTicker(fr.pollPeriod)
